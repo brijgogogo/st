@@ -53,7 +53,6 @@ static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
 static void numlock(const Arg *);
 static void selpaste(const Arg *);
-static void swapcolors(const Arg *);
 static void zoom(const Arg *);
 static void zoomabs(const Arg *);
 static void zoomreset(const Arg *);
@@ -140,9 +139,6 @@ static void xdrawglyphfontspecs(const XftGlyphFontSpec *, Glyph, int, int, int);
 static void xdrawglyph(Glyph, int, int);
 static void xclear(int, int, int, int);
 static int xgeommasktogravity(int);
-static void ximopen(Display *);
-static void ximinstantiate(Display *, XPointer, XPointer);
-static void ximdestroy(XIM, XPointer, XPointer);
 static void xinit(int, int);
 static void cresize(int, int);
 static void xresize(int, int);
@@ -227,9 +223,8 @@ typedef struct {
 } Fontcache;
 
 /* Fontcache is an array now. A new font will be appended to the array. */
-static Fontcache *frc = NULL;
+static Fontcache frc[16];
 static int frclen = 0;
-static int frccap = 0;
 static char *usedfont = NULL;
 static double usedfontsize = 0;
 static double defaultfontsize = 0;
@@ -244,7 +239,6 @@ static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
 static int oldbutton = 3; /* button event on startup: 3 = release */
-int usealtcolors = 0; /* 1 to use alternate palette */
 
 void
 clipcopy(const Arg *dummy)
@@ -292,15 +286,6 @@ zoom(const Arg *arg)
 	larg.f = usedfontsize + arg->f;
 	zoomabs(&larg);
 }
-
-void
-swapcolors(const Arg *dummy)
-{
-	usealtcolors = !usealtcolors;
-	xloadcols();
-	redraw();
-}
-
 
 void
 zoomabs(const Arg *arg)
@@ -717,11 +702,6 @@ sixd_to_16bit(int x)
 	return x == 0 ? 0 : 0x3737 + 0x2828 * x;
 }
 
-const char* getcolorname(int i)
-{
-    return (usealtcolors) ?  altcolorname[i] : colorname[i];
-}
-
 int
 xloadcolor(int i, const char *name, Color *ncolor)
 {
@@ -740,7 +720,7 @@ xloadcolor(int i, const char *name, Color *ncolor)
 			return XftColorAllocValue(xw.dpy, xw.vis,
 			                          xw.cmap, &color, ncolor);
 		} else
-			name = getcolorname(i);
+			name = colorname[i];
 	}
 
 	return XftColorAllocName(xw.dpy, xw.vis, xw.cmap, name, ncolor);
@@ -757,13 +737,13 @@ xloadcols(void)
 		for (cp = dc.col; cp < &dc.col[dc.collen]; ++cp)
 			XftColorFree(xw.dpy, xw.vis, xw.cmap, cp);
 	} else {
-		dc.collen = MAX(LEN(colorname), LEN(altcolorname));
+		dc.collen = MAX(LEN(colorname), 256);
 		dc.col = xmalloc(dc.collen * sizeof(Color));
 	}
 
 	for (i = 0; i < dc.collen; i++)
 		if (!xloadcolor(i, NULL, &dc.col[i])) {
-			if (getcolorname(i))
+			if (colorname[i])
 				die("could not allocate color '%s'\n", colorname[i]);
 			else
 				die("could not allocate color %d\n", i);
@@ -778,6 +758,7 @@ xsetcolorname(int x, const char *name)
 
 	if (!BETWEEN(x, 0, dc.collen))
 		return 1;
+
 
 	if (!xloadcolor(x, name, &ncolor))
 		return 1;
@@ -1016,43 +997,6 @@ xunloadfonts(void)
 }
 
 void
-ximopen(Display *dpy)
-{
-	XIMCallback destroy = { .client_data = NULL, .callback = ximdestroy };
-
-	if ((xw.xim = XOpenIM(xw.dpy, NULL, NULL, NULL)) == NULL) {
-		XSetLocaleModifiers("@im=local");
-		if ((xw.xim = XOpenIM(xw.dpy, NULL, NULL, NULL)) == NULL) {
-			XSetLocaleModifiers("@im=");
-			if ((xw.xim = XOpenIM(xw.dpy, NULL, NULL, NULL)) == NULL)
-				die("XOpenIM failed. Could not open input device.\n");
-		}
-	}
-	if (XSetIMValues(xw.xim, XNDestroyCallback, &destroy, NULL) != NULL)
-		die("XSetIMValues failed. Could not set input method value.\n");
-	xw.xic = XCreateIC(xw.xim, XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
-				XNClientWindow, xw.win, XNFocusWindow, xw.win, NULL);
-	if (xw.xic == NULL)
-		die("XCreateIC failed. Could not obtain input method.\n");
-}
-
-void
-ximinstantiate(Display *dpy, XPointer client, XPointer call)
-{
-	ximopen(dpy);
-	XUnregisterIMInstantiateCallback(xw.dpy, NULL, NULL, NULL,
-					ximinstantiate, NULL);
-}
-
-void
-ximdestroy(XIM xim, XPointer client, XPointer call)
-{
-	xw.xim = NULL;
-	XRegisterIMInstantiateCallback(xw.dpy, NULL, NULL, NULL,
-					ximinstantiate, NULL);
-}
-
-void
 xinit(int cols, int rows)
 {
 	XGCValues gcvalues;
@@ -1089,7 +1033,7 @@ xinit(int cols, int rows)
 	xw.attrs.background_pixel = dc.col[defaultbg].pixel;
 	xw.attrs.border_pixel = dc.col[defaultbg].pixel;
 	xw.attrs.bit_gravity = NorthWestGravity;
-	xw.attrs.event_mask = FocusChangeMask | KeyPressMask | KeyReleaseMask
+	xw.attrs.event_mask = FocusChangeMask | KeyPressMask
 		| ExposureMask | VisibilityChangeMask | StructureNotifyMask
 		| ButtonMotionMask | ButtonPressMask | ButtonReleaseMask;
 	xw.attrs.colormap = xw.cmap;
@@ -1117,19 +1061,34 @@ xinit(int cols, int rows)
 	xw.draw = XftDrawCreate(xw.dpy, xw.buf, xw.vis, xw.cmap);
 
 	/* input methods */
-	ximopen(xw.dpy);
+	if ((xw.xim = XOpenIM(xw.dpy, NULL, NULL, NULL)) == NULL) {
+		XSetLocaleModifiers("@im=local");
+		if ((xw.xim =  XOpenIM(xw.dpy, NULL, NULL, NULL)) == NULL) {
+			XSetLocaleModifiers("@im=");
+			if ((xw.xim = XOpenIM(xw.dpy,
+					NULL, NULL, NULL)) == NULL) {
+				die("XOpenIM failed. Could not open input"
+					" device.\n");
+			}
+		}
+	}
+	xw.xic = XCreateIC(xw.xim, XNInputStyle, XIMPreeditNothing
+					   | XIMStatusNothing, XNClientWindow, xw.win,
+					   XNFocusWindow, xw.win, NULL);
+	if (xw.xic == NULL)
+		die("XCreateIC failed. Could not obtain input method.\n");
 
 	/* white cursor, black outline */
 	cursor = XCreateFontCursor(xw.dpy, mouseshape);
 	XDefineCursor(xw.dpy, xw.win, cursor);
 
-	if (XParseColor(xw.dpy, xw.cmap, getcolorname(mousefg), &xmousefg) == 0) {
+	if (XParseColor(xw.dpy, xw.cmap, colorname[mousefg], &xmousefg) == 0) {
 		xmousefg.red   = 0xffff;
 		xmousefg.green = 0xffff;
 		xmousefg.blue  = 0xffff;
 	}
 
-	if (XParseColor(xw.dpy, xw.cmap, getcolorname(mousebg), &xmousebg) == 0) {
+	if (XParseColor(xw.dpy, xw.cmap, colorname[mousebg], &xmousebg) == 0) {
 		xmousebg.red   = 0x0000;
 		xmousebg.green = 0x0000;
 		xmousebg.blue  = 0x0000;
@@ -1259,10 +1218,13 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 			fontpattern = FcFontSetMatch(0, fcsets, 1,
 					fcpattern, &fcres);
 
-			/* Allocate memory for the new cache entry. */
-			if (frclen >= frccap) {
-				frccap += 16;
-				frc = xrealloc(frc, frccap * sizeof(Fontcache));
+			/*
+			 * Overwrite or create the new cache entry.
+			 */
+			if (frclen >= LEN(frc)) {
+				frclen = LEN(frc) - 1;
+				XftFontClose(xw.dpy, frc[frclen].font);
+				frc[frclen].unicodep = 0;
 			}
 
 			frc[frclen].font = XftFontOpenPattern(xw.dpy,
@@ -1593,16 +1555,6 @@ xfinishdraw(void)
 }
 
 void
-xximspot(int x, int y)
-{
-	XPoint spot = { borderpx + x * win.cw, borderpx + (y + 1) * win.ch };
-	XVaNestedList attr = XVaCreateNestedList(0, XNSpotLocation, &spot, NULL);
-
-	XSetICValues(xw.xic, XNPreeditAttributes, attr, NULL);
-	XFree(attr);
-}
-
-void
 expose(XEvent *ev)
 {
 	redraw();
@@ -1778,6 +1730,7 @@ kpress(XEvent *ev)
 	}
 	ttywrite(buf, len, 1);
 }
+
 
 void
 cmessage(XEvent *e)
