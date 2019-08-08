@@ -196,6 +196,7 @@ static Shortcut shortcuts[] = {
 	{ TERMMOD,              XK_Return,      newterm,        {.i =  0} },
 	{ MODKEY,               XK_o,           opencopied,     {.v = "xdg-open"} },
 	{ MODKEY,               XK_b,           opencopied,     {.v = "chromium"} },
+	{ MODKEY,               XK_m,           opencopied,     {.v = "mpv --geometry 355x200-5-40"} },
 
 	{ ShiftMask,            XK_Page_Up,     kscrollup,      {.i = -1} },
 	{ ShiftMask,            XK_Page_Down,   kscrolldown,    {.i = -1} },
